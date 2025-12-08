@@ -1,0 +1,17 @@
+{
+  "name": "overtake-staking-bot",
+  "version": "1.0.0",
+  "description": "Sui OVERTAKE staking monitor bot for Telegram",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "keywords": ["sui", "overtake", "staking", "telegram", "bot"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@mysten/sui.js": "^0.54.1",
+    "node-telegram-bot-api": "^0.66.0",
+    "axios": "^1.6.0"
+  }
+}
