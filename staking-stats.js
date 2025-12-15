@@ -15,16 +15,29 @@ let cachedStats = null;
 let lastFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5분
 
-// 이벤트 수집 함수
+// 이벤트 수집 함수 (디버깅 강화)
 async function collectEvents(packageId, eventType) {
     let total = BigInt(0);
     let count = 0;
     let cursor = null;
-    let retries = 3;
+    let pageCount = 0;
+    const maxPages = 100; // 최대 100페이지 (5000개 이벤트)
+    const pkgShort = packageId.substring(0, 10) + '...';
     
-    while (retries > 0) {
-        try {
-            while (true) {
+    console.log(`    [${pkgShort}] ${eventType} 수집 시작...`);
+    const startTime = Date.now();
+    
+    try {
+        while (pageCount < maxPages) {
+            pageCount++;
+            
+            // 10페이지마다 진행상황 로그
+            if (pageCount % 10 === 0) {
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                console.log(`    [${pkgShort}] ${eventType}: ${pageCount}페이지, ${count}개 수집됨 (${elapsed}초)`);
+            }
+            
+            try {
                 const events = await suiClient.queryEvents({
                     query: { MoveEventType: `${packageId}::staking::${eventType}` },
                     cursor,
@@ -32,6 +45,7 @@ async function collectEvents(packageId, eventType) {
                     order: 'descending'
                 });
                 
+                // 이벤트 처리
                 for (const event of events.data) {
                     const amount = event.parsedJson?.amount || 
                                   event.parsedJson?.principal_amount ||
@@ -42,18 +56,31 @@ async function collectEvents(packageId, eventType) {
                     }
                 }
                 
-                if (!events.hasNextPage || count >= 50000) break;
+                // 다음 페이지 없으면 종료
+                if (!events.hasNextPage) {
+                    console.log(`    [${pkgShort}] ${eventType}: 완료! 총 ${count}개 (${pageCount}페이지)`);
+                    break;
+                }
+                
                 cursor = events.nextCursor;
+                
+            } catch (queryError) {
+                console.error(`    [${pkgShort}] ${eventType} 쿼리 에러 (페이지 ${pageCount}):`, queryError.message);
+                // 에러나면 1초 대기 후 재시도
+                await new Promise(r => setTimeout(r, 1000));
             }
-            break; // 성공하면 루프 탈출
-        } catch (error) {
-            retries--;
-            if (retries === 0) {
-                console.log(`${eventType} 이벤트 조회 실패:`, error.message);
-            }
-            await new Promise(r => setTimeout(r, 2000)); // 재시도 전 대기
         }
+        
+        if (pageCount >= maxPages) {
+            console.log(`    [${pkgShort}] ${eventType}: 최대 페이지 도달 (${maxPages}), ${count}개 수집`);
+        }
+        
+    } catch (error) {
+        console.error(`    [${pkgShort}] ${eventType} 전체 에러:`, error.message);
     }
+    
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`    [${pkgShort}] ${eventType}: ${count}개, ${elapsed}초 소요`);
     
     return { total, count };
 }
@@ -67,7 +94,11 @@ async function getTotalStaking(forceRefresh = false) {
         return cachedStats;
     }
     
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
     console.log('📊 스테이킹 통계 조회 시작...');
+    console.log('═══════════════════════════════════════════════════');
+    const totalStartTime = Date.now();
     
     let totalDeposit = BigInt(0);
     let totalClaim = BigInt(0);
@@ -75,25 +106,22 @@ async function getTotalStaking(forceRefresh = false) {
     let claimCount = 0;
     
     // 모든 패키지에서 이벤트 수집
-    for (const pkg of PACKAGES) {
+    for (let i = 0; i < PACKAGES.length; i++) {
+        const pkg = PACKAGES[i];
         const pkgShort = pkg.substring(0, 10) + '...';
-        console.log(`  [${pkgShort}] 조회 중...`);
+        console.log(`\n[${i + 1}/${PACKAGES.length}] 패키지: ${pkgShort}`);
         
         // Deposit 이벤트
+        console.log('  📥 Deposit 이벤트 조회...');
         const deposits = await collectEvents(pkg, 'DepositedEvent');
         totalDeposit += deposits.total;
         depositCount += deposits.count;
-        if (deposits.count > 0) {
-            console.log(`    ✅ Deposit: ${deposits.count}개`);
-        }
         
         // Claim 이벤트
+        console.log('  📤 Claim 이벤트 조회...');
         const claims = await collectEvents(pkg, 'ClaimedEvent');
         totalClaim += claims.total;
         claimCount += claims.count;
-        if (claims.count > 0) {
-            console.log(`    ✅ Claim: ${claims.count}개`);
-        }
     }
     
     // 계산
@@ -103,6 +131,7 @@ async function getTotalStaking(forceRefresh = false) {
     const claimTake = Number(totalClaim) / 1e9;
     
     // 가격 조회
+    console.log('\n💰 가격 조회 중...');
     const price = await getTakePrice();
     const netStakedUsd = netStakedTake * price;
     
@@ -122,7 +151,18 @@ async function getTotalStaking(forceRefresh = false) {
     cachedStats = stats;
     lastFetchTime = now;
     
-    console.log(`✅ 총 스테이킹: ${netStakedTake.toLocaleString()} TAKE ($${netStakedUsd.toLocaleString()})`);
+    const totalElapsed = ((Date.now() - totalStartTime) / 1000).toFixed(1);
+    
+    console.log('');
+    console.log('═══════════════════════════════════════════════════');
+    console.log(`✅ 조회 완료! (총 ${totalElapsed}초)`);
+    console.log('───────────────────────────────────────────────────');
+    console.log(`💎 총 스테이킹: ${netStakedTake.toLocaleString()} TAKE`);
+    console.log(`💵 USD 가치: $${netStakedUsd.toLocaleString()}`);
+    console.log(`📥 Deposit: ${depositCount}회 (${depositTake.toLocaleString()} TAKE)`);
+    console.log(`📤 Claim: ${claimCount}회 (${claimTake.toLocaleString()} TAKE)`);
+    console.log('═══════════════════════════════════════════════════');
+    console.log('');
     
     return stats;
 }
@@ -131,6 +171,7 @@ async function getTotalStaking(forceRefresh = false) {
 function clearStatsCache() {
     cachedStats = null;
     lastFetchTime = 0;
+    console.log('🗑️ 스테이킹 통계 캐시 초기화됨');
 }
 
 // 캐시 상태 확인
