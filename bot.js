@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { loadUsers, saveUser, updateUser, deleteUser, getUser } = require('./database');
 const { startMonitoring, stopMonitoring, getStatus } = require('./monitor');
 const { getTakePrice } = require('./price');
+const { getTotalStaking, clearStatsCache, getCacheStatus } = require('./staking-stats');
 
 // 환경변수에서 BOT_TOKEN 가져오기
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -55,6 +56,7 @@ Sui 블록체인의 OVERTAKE (TAKE) 토큰 스테이킹을 실시간으로 모�
 /threshold 5000 - 임계값 변경
 /status - 현재 상태 확인
 /stop - 모니터링 중지
+/totalstaking - 📊 전체 스테이킹 현황
 /help - 전체 명령어 보기
 
 <i>Railway에서 24시간 실행 가능합니다!</i>
@@ -83,12 +85,14 @@ bot.onText(/\/help/, (msg) => {
 
 <b>정보 명령어:</b>
 /price - 현재 TAKE 가격
+/totalstaking - 📊 전체 스테이킹 현황
 
 <b>💡 사용 예시:</b>
 1️⃣ /monitor - 기본값($10,000)으로 시작
 2️⃣ /threshold 5000 - $5,000로 변경
 3️⃣ /status - 현재 설정 확인
-4️⃣ /stop - 모니터링 중지
+4️⃣ /totalstaking - 전체 스테이킹 확인
+5️⃣ /stop - 모니터링 중지
 
 <b>🎯 감지되는 활동:</b>
 • <b>🟢 Deposit</b> - 스테이킹
@@ -239,6 +243,132 @@ bot.onText(/\/price/, async (msg) => {
         bot.sendMessage(chatId, priceMsg, { parse_mode: 'HTML' });
     } catch (error) {
         bot.sendMessage(chatId, '⚠️ 가격 조회에 실패했습니다.');
+    }
+});
+
+// /totalstaking - 전체 스테이킹 현황 조회
+bot.onText(/\/totalstaking/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    // 캐시 상태 확인
+    const cacheStatus = getCacheStatus();
+    let loadingText = '📊 전체 스테이킹 정보를 조회 중입니다...\n\n⏳ 잠시만 기다려주세요';
+    
+    if (cacheStatus.isCached) {
+        loadingText = '📊 캐시된 데이터를 불러오는 중...';
+    } else {
+        loadingText += ' (최대 1분 소요)';
+    }
+    
+    // 로딩 메시지
+    const loadingMsg = await bot.sendMessage(chatId, loadingText);
+    
+    try {
+        const stats = await getTotalStaking();
+        
+        // 로딩 메시지 삭제
+        try {
+            await bot.deleteMessage(chatId, loadingMsg.message_id);
+        } catch (e) {
+            // 삭제 실패해도 계속 진행
+        }
+        
+        // 캐시 정보
+        const newCacheStatus = getCacheStatus();
+        let cacheInfo = '';
+        if (newCacheStatus.isCached && newCacheStatus.remainingSeconds > 0) {
+            const mins = Math.floor(newCacheStatus.remainingSeconds / 60);
+            const secs = newCacheStatus.remainingSeconds % 60;
+            cacheInfo = `\n\n<i>📦 캐시 유효: ${mins}분 ${secs}초</i>`;
+        }
+        
+        const statsMsg = `
+📊 <b>OVERTAKE 전체 스테이킹 현황</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+💎 <b>현재 스테이킹:</b>
+   ${stats.netStaked.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
+
+💵 <b>USD 가치:</b>
+   $${stats.netStakedUsd.toLocaleString('en-US', {maximumFractionDigits: 0})}
+━━━━━━━━━━━━━━━━━━━━━
+
+<b>📈 상세 내역:</b>
+🟢 총 Deposit: ${stats.totalDeposited.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
+🔴 총 Claim: ${stats.totalClaimed.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
+
+<b>📊 활동 통계:</b>
+• Deposit 횟수: ${stats.depositCount.toLocaleString()}회
+• Claim 횟수: ${stats.claimCount.toLocaleString()}회
+
+💰 <b>TAKE 가격:</b> $${stats.price.toFixed(4)}
+⏱️ <b>조회 시간:</b> ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}${cacheInfo}
+        `.trim();
+        
+        bot.sendMessage(chatId, statsMsg, { parse_mode: 'HTML' });
+        
+    } catch (error) {
+        // 로딩 메시지 삭제
+        try {
+            await bot.deleteMessage(chatId, loadingMsg.message_id);
+        } catch (e) {}
+        
+        console.error('총 스테이킹 조회 실패:', error);
+        bot.sendMessage(
+            chatId, 
+            '⚠️ 총 스테이킹 조회에 실패했습니다.\n\n잠시 후 다시 시도해주세요.',
+            { parse_mode: 'HTML' }
+        );
+    }
+});
+
+// /refreshstaking - 캐시 무시하고 새로 조회 (선택적 기능)
+bot.onText(/\/refreshstaking/, async (msg) => {
+    const chatId = msg.chat.id;
+    
+    // 캐시 초기화
+    clearStatsCache();
+    
+    const loadingMsg = await bot.sendMessage(
+        chatId, 
+        '🔄 캐시를 초기화하고 새로 조회합니다...\n\n⏳ 최대 1분 소요'
+    );
+    
+    try {
+        const stats = await getTotalStaking(true);
+        
+        try {
+            await bot.deleteMessage(chatId, loadingMsg.message_id);
+        } catch (e) {}
+        
+        const statsMsg = `
+🔄 <b>OVERTAKE 스테이킹 현황 (새로고침)</b>
+
+━━━━━━━━━━━━━━━━━━━━━
+💎 <b>현재 스테이킹:</b>
+   ${stats.netStaked.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
+
+💵 <b>USD 가치:</b>
+   $${stats.netStakedUsd.toLocaleString('en-US', {maximumFractionDigits: 0})}
+━━━━━━━━━━━━━━━━━━━━━
+
+🟢 총 Deposit: ${stats.totalDeposited.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${stats.depositCount}회)
+🔴 총 Claim: ${stats.totalClaimed.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${stats.claimCount}회)
+
+💰 TAKE 가격: $${stats.price.toFixed(4)}
+⏱️ ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}
+
+<i>📦 캐시 갱신 완료 (5분간 유효)</i>
+        `.trim();
+        
+        bot.sendMessage(chatId, statsMsg, { parse_mode: 'HTML' });
+        
+    } catch (error) {
+        try {
+            await bot.deleteMessage(chatId, loadingMsg.message_id);
+        } catch (e) {}
+        
+        bot.sendMessage(chatId, '⚠️ 조회 실패. 잠시 후 다시 시도해주세요.');
     }
 });
 
