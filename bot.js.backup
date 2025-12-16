@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { loadUsers, saveUser, updateUser, deleteUser, getUser } = require('./database');
 const { startMonitoring, stopMonitoring, getStatus } = require('./monitor');
-const { getTakePrice, getTakeData } = require('./price');
+const { getTakePrice } = require('./price');
 const { getTotalStaking, clearStatsCache, getCacheStatus } = require('./staking-stats');
 
 // 환경변수에서 BOT_TOKEN 가져오기
@@ -49,8 +49,7 @@ Sui 블록체인의 OVERTAKE (TAKE) 토큰 스테이킹을 실시간으로 모�
 <b>📊 감지 가능한 활동:</b>
 🟢 Deposit - 스테이킹
 🟡 Request Unstake - 언스테이킹 요청
-🔴 Claim Unstake - 클레임 (7일 후)
-🟠 Early Unstake - 긴급 언스테이킹 (30% 패널티)
+🔴 Claim Unstake - 클레임
 
 <b>🚀 빠른 시작:</b>
 /monitor - 모니터링 시작 (기본값: $10,000)
@@ -99,7 +98,6 @@ bot.onText(/\/help/, (msg) => {
 • <b>🟢 Deposit</b> - 스테이킹
 • <b>🟡 Request Unstake</b> - 언스테이킹 요청 (7일 대기)
 • <b>🔴 Claim Unstake</b> - 실제 인출
-• <b>🟠 Early Unstake</b> - 긴급 언스테이킹 (30% 패널티, 즉시 인출)
     `.trim();
     
     bot.sendMessage(chatId, helpMsg, { parse_mode: 'HTML' });
@@ -137,7 +135,6 @@ bot.onText(/\/monitor/, (msg) => {
 🟢 Deposit (스테이킹)
 🟡 Request Unstake (언스테이킹 요청)
 🔴 Claim Unstake (클레임)
-🟠 Early Unstake (긴급 언스테이킹)
 
 임계값을 변경하려면 /threshold 명령어를 사용하세요.
     `.trim();
@@ -220,7 +217,6 @@ bot.onText(/\/status/, async (msg) => {
 🟢 Deposit (스테이킹)
 🟡 Request Unstake (언스테이킹 요청)
 🔴 Claim Unstake (클레임)
-🟠 Early Unstake (긴급 언스테이킹)
 
 ⏱️ <b>체크 간격:</b> 10초
 🌐 <b>네트워크:</b> Sui Mainnet
@@ -261,7 +257,7 @@ bot.onText(/\/totalstaking/, async (msg) => {
     if (cacheStatus.isCached) {
         loadingText = '📊 캐시된 데이터를 불러오는 중...';
     } else {
-        loadingText += ' (최대 30초 소요)';
+        loadingText += ' (최대 1분 소요)';
     }
     
     // 로딩 메시지
@@ -308,9 +304,6 @@ bot.onText(/\/totalstaking/, async (msg) => {
 
 💵 <b>USD 가치:</b>
    $${stats.netStakedUsd.toLocaleString('en-US', {maximumFractionDigits: 0})}
-
-📊 <b>스테이킹 비율:</b>
-   ${stats.stakingRatio.toFixed(2)}% (순환 공급량 대비)
 ━━━━━━━━━━━━━━━━━━━━━
 
 <b>🔒 타입별 현황:</b>
@@ -321,10 +314,9 @@ ${typeStats}
 
 <b>📊 활동 통계:</b>
 • Deposit 횟수: ${stats.depositCount.toLocaleString()}회
-• Claim 횟수: ${stats.claimCount.toLocaleString()}회 (일반 ${stats.normalClaimCount}회, 긴급 ${stats.earlyClaimCount}회)
+• Claim 횟수: ${stats.claimCount.toLocaleString()}회
 
 💰 <b>TAKE 가격:</b> $${stats.price.toFixed(4)}
-📦 <b>순환 공급량:</b> ${stats.circulatingSupply.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
 ⏱️ <b>조회 시간:</b> ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}${cacheInfo}
         `.trim();
         
@@ -354,7 +346,7 @@ bot.onText(/\/refreshstaking/, async (msg) => {
     
     const loadingMsg = await bot.sendMessage(
         chatId, 
-        '🔄 캐시를 초기화하고 새로 조회합니다...\n\n⏳ 최대 30초 소요'
+        '🔄 캐시를 초기화하고 새로 조회합니다...\n\n⏳ 최대 1분 소요'
     );
     
     try {
@@ -386,18 +378,14 @@ bot.onText(/\/refreshstaking/, async (msg) => {
 
 💵 <b>USD 가치:</b>
    $${stats.netStakedUsd.toLocaleString('en-US', {maximumFractionDigits: 0})}
-
-📊 <b>스테이킹 비율:</b>
-   ${stats.stakingRatio.toFixed(2)}% (순환 공급량 대비)
 ━━━━━━━━━━━━━━━━━━━━━
 
 <b>🔒 타입별 현황:</b>
 ${typeStats}
 🟢 총 Deposit: ${stats.totalDeposited.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${stats.depositCount}회)
-🔴 총 Claim: ${stats.totalClaimed.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (일반 ${stats.normalClaimCount}회, 긴급 ${stats.earlyClaimCount}회)
+🔴 총 Claim: ${stats.totalClaimed.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${stats.claimCount}회)
 
 💰 TAKE 가격: $${stats.price.toFixed(4)}
-📦 순환 공급량: ${stats.circulatingSupply.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
 ⏱️ ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}
 
 <i>📦 캐시 갱신 완료 (5분간 유효)</i>

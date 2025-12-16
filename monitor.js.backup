@@ -3,22 +3,20 @@ const { takeToUsd } = require('./price');
 
 // Sui 설정
 const SUI_RPC = 'https://fullnode.mainnet.sui.io:443';
-const STAKING_PACKAGE = '0x528a6350937fe3904c02adc806fe35d7500fab2cccd5e6493dc7984feab2e570'; // OVERTAKE 3
+const STAKING_PACKAGE = '0x528a6350937fe3904c02adc806fe35d7500fab2cccd5e6493dc7984feab2e570'; // OVERTAKE 3 (실제 주소)
 const STAKING_MODULE = 'staking';
 
 // 함수별 이모지
 const FUNCTION_EMOJIS = {
     'deposit': '🟢',
     'request_unstake': '🟡',
-    'claim_unstake': '🔴',
-    'early_unstake_and_claim': '🟠'  // 새로 추가!
+    'claim_unstake': '🔴'
 };
 
 const FUNCTION_NAMES = {
     'deposit': '스테이킹',
     'request_unstake': '언스테이킹 요청',
-    'claim_unstake': '클레임',
-    'early_unstake_and_claim': '긴급 언스테이킹'  // 새로 추가!
+    'claim_unstake': '클레임'
 };
 
 // 전역 상태
@@ -44,9 +42,9 @@ function extractTakeAmount(transaction) {
                     if (event.parsedJson) {
                         // 모든 가능한 금액 필드 찾기
                         const amount = event.parsedJson.amount ||               // DepositedEvent
-                                      event.parsedJson.principal_amount ||      // UnstakeRequestedEvent / EarlyUnstakeEvent
+                                      event.parsedJson.principal_amount ||      // UnstakeRequestedEvent
                                       event.parsedJson.principal_returned ||    // ClaimedEvent (메인 금액)
-                                      event.parsedJson.rewards_claimed ||       // ClaimedEvent / EarlyUnstakeEvent (리워드)
+                                      event.parsedJson.rewards_claimed ||       // ClaimedEvent (리워드)
                                       event.parsedJson.value || 
                                       event.parsedJson.stake_amount ||
                                       event.parsedJson.unstake_amount ||
@@ -164,8 +162,7 @@ function isStakingTransaction(transaction) {
                     
                     // 스테이킹 컨트랙트 매칭
                     if (packageId === STAKING_PACKAGE && module === STAKING_MODULE) {
-                        // 4개 함수 모두 감지!
-                        if (['deposit', 'request_unstake', 'claim_unstake', 'early_unstake_and_claim'].includes(func)) {
+                        if (['deposit', 'request_unstake', 'claim_unstake'].includes(func)) {
                             return {
                                 function: func,
                                 sender: txData.sender,
@@ -195,11 +192,8 @@ async function sendAlert(bot, chatId, stakingInfo, amount, usdValue) {
     message += `👤 <b>주소:</b> <code>${stakingInfo.sender.substring(0, 10)}...${stakingInfo.sender.substring(stakingInfo.sender.length - 8)}</code>\n`;
     message += `🔗 <b>TX:</b> <a href="https://suiscan.xyz/mainnet/tx/${stakingInfo.digest}">View on Suiscan</a>\n`;
     
-    // 함수별 추가 정보
     if (stakingInfo.function === 'request_unstake') {
         message += `\n⏰ <i>7일 언본딩 기간 후 클레임 가능</i>`;
-    } else if (stakingInfo.function === 'early_unstake_and_claim') {
-        message += `\n⚠️ <i>30% 패널티로 즉시 언스테이킹</i>`;
     }
     
     // Telegram Rate Limit 대응: 최대 3번 재시도
@@ -240,8 +234,8 @@ async function monitorUser(chatId, bot, config) {
         }
         const processedSet = processedTxs.get(chatId);
         
-        // 각 함수별로 조회 (4개 함수!)
-        const functions = ['deposit', 'request_unstake', 'claim_unstake', 'early_unstake_and_claim'];
+        // 각 함수별로 조회 (deposit, request_unstake, claim_unstake)
+        const functions = ['deposit', 'request_unstake', 'claim_unstake'];
         
         for (const func of functions) {
             try {
@@ -266,10 +260,10 @@ async function monitorUser(chatId, bot, config) {
                                 showBalanceChanges: true,
                                 showObjectChanges: true,
                                 showInput: true,
-                                showEvents: true
+                                showEvents: true // 이벤트 조회 추가!
                             },
                             order: 'descending',
-                            limit: 50
+                            limit: 50 // 10 → 50으로 증가!
                         });
                     } catch (rpcError) {
                         retries--;

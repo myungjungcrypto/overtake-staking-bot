@@ -1,25 +1,18 @@
 const { SuiClient } = require('@mysten/sui.js/client');
-const { getTakePrice, getTakeData } = require('./price');
+const { getTakePrice } = require('./price');
 
 const SUI_RPC = 'https://fullnode.mainnet.sui.io:443';
 const suiClient = new SuiClient({ url: SUI_RPC });
 
+// 원본 패키지만 사용 (업그레이드되어도 이벤트 타입은 원본 패키지 ID 유지)
 const ORIGINAL_PACKAGE = '0x2b5b2081ce2428bdd67057ed6d62d1112173ded3588eab63ab93c2042a0b296a';
 
-// 스테이킹 풀 ID → 타입 매핑 (DepositedEvent, UnstakeRequestedEvent용)
+// 스테이킹 풀 ID → 타입 매핑
 const STAKING_POOLS = {
     '0xd299a39fbe797e4cc7df48ed7df9a33b5dda0f8fb960016bf42004fc62d50134': 'Flexible',
     '0x2b18f46876df3b3c28627f65d9a362fb5894c16ad4d63d1c52890280bea51a2b': '30일',
     '0x5b9e927f19595c7acfbd3819e6cb91eedeb6b85eb319f122e388bc4c459eb2bb': '90일',
     '0x8e41a28ee4f0fb7e26d1f9330a23b9ae5b4827097e1182200dce965c35343c6d': '180일'
-};
-
-// Lockup Duration → 타입 매핑 (ClaimedEvent용)
-const LOCKUP_DURATIONS = {
-    '0': 'Flexible',
-    '2592000': '30일',    // 30 * 24 * 60 * 60
-    '7776000': '90일',    // 90 * 24 * 60 * 60
-    '15552000': '180일'   // 180 * 24 * 60 * 60
 };
 
 // 캐시 (5분)
@@ -72,40 +65,15 @@ async function collectEvents(eventType) {
                     const amount = event.parsedJson?.amount || 
                                   event.parsedJson?.principal_amount ||
                                   event.parsedJson?.principal_returned;
+                    const poolId = event.parsedJson?.pool_id;
                     
-                    // EarlyUnstakeEvent는 principal + rewards 합산
-                    let finalAmount = amount;
-                    if (eventType === 'EarlyUnstakeEvent' && event.parsedJson) {
-                        const principal = event.parsedJson.principal_amount ? BigInt(event.parsedJson.principal_amount) : BigInt(0);
-                        const rewards = event.parsedJson.rewards_claimed ? BigInt(event.parsedJson.rewards_claimed) : BigInt(0);
-                        finalAmount = principal + rewards;  // 패널티 전 총 금액
-                    }
-                    
-                    // 타입 결정 로직
-                    let poolType = 'Unknown';
-                    
-                    if (eventType === 'ClaimedEvent' || eventType === 'EarlyUnstakeEvent') {
-                        // ClaimedEvent, EarlyUnstakeEvent는 pool_lockup_duration_seconds 사용
-                        const duration = event.parsedJson?.pool_lockup_duration_seconds;
-                        poolType = LOCKUP_DURATIONS[duration] || 'Unknown';
-                        
-                        // 백업: pool_id도 확인
-                        if (poolType === 'Unknown' && event.parsedJson?.pool_id) {
-                            const poolId = event.parsedJson.pool_id;
-                            poolType = STAKING_POOLS[poolId] || 'Unknown';
-                        }
-                    } else {
-                        // DepositedEvent, UnstakeRequestedEvent는 pool_id 사용
-                        const poolId = event.parsedJson?.pool_id;
-                        poolType = STAKING_POOLS[poolId] || 'Unknown';
-                    }
-                    
-                    if (finalAmount) {
-                        const amountBigInt = typeof finalAmount === 'bigint' ? finalAmount : BigInt(finalAmount);
+                    if (amount) {
+                        const amountBigInt = BigInt(amount);
                         total += amountBigInt;
                         count++;
                         
                         // 타입별 분류
+                        const poolType = STAKING_POOLS[poolId] || 'Unknown';
                         byType[poolType].total += amountBigInt;
                         byType[poolType].count++;
                     }
@@ -159,6 +127,7 @@ async function getTotalStaking(forceRefresh = false) {
     console.log('═══════════════════════════════════════════════════');
     const totalStartTime = Date.now();
     
+    // 원본 패키지에서 모든 이벤트 수집
     console.log('\n📍 이벤트 타입 패키지: 0x2b5b2081... (원본)');
     console.log('   (OVERTAKE 1, 2, 3 모든 버전의 이벤트 포함)');
     
@@ -166,13 +135,9 @@ async function getTotalStaking(forceRefresh = false) {
     console.log('\n  📥 Deposit 이벤트 조회...');
     const deposits = await collectEvents('DepositedEvent');
     
-    // Claim 이벤트 (일반 클레임)
+    // Claim 이벤트
     console.log('\n  📤 Claim 이벤트 조회...');
     const claims = await collectEvents('ClaimedEvent');
-    
-    // Early Unstake 이벤트 (긴급 언스테이킹 = 즉시 클레임)
-    console.log('\n  🟠 Early Unstake 이벤트 조회...');
-    const earlyClaims = await collectEvents('EarlyUnstakeEvent');
     
     // 타입별 순 스테이킹 계산
     const types = ['Flexible', '30일', '90일', '180일'];
@@ -181,40 +146,27 @@ async function getTotalStaking(forceRefresh = false) {
     for (const type of types) {
         const deposited = deposits.byType[type].total;
         const claimed = claims.byType[type].total;
-        const earlyClaimed = earlyClaims.byType[type].total;
-        const totalClaimed = claimed + earlyClaimed;  // 일반 + 긴급 클레임
-        const net = deposited - totalClaimed;
+        const net = deposited - claimed;
         
         byType[type] = {
             netStaked: Number(net) / 1e9,
             totalDeposited: Number(deposited) / 1e9,
-            totalClaimed: Number(totalClaimed) / 1e9,
-            normalClaimCount: claims.byType[type].count,
-            earlyClaimCount: earlyClaims.byType[type].count,
+            totalClaimed: Number(claimed) / 1e9,
             depositCount: deposits.byType[type].count,
-            claimCount: claims.byType[type].count + earlyClaims.byType[type].count
+            claimCount: claims.byType[type].count
         };
     }
     
     // 전체 계산
-    const netStaked = deposits.total - claims.total - earlyClaims.total;  // 일반 + 긴급 클레임
+    const netStaked = deposits.total - claims.total;
     const netStakedTake = Number(netStaked) / 1e9;
     const depositTake = Number(deposits.total) / 1e9;
-    const claimTake = Number(claims.total + earlyClaims.total) / 1e9;
+    const claimTake = Number(claims.total) / 1e9;
     
-    // 가격 및 순환 공급량 조회
-    console.log('\n💰 가격 및 순환 공급량 조회 중...');
-    const takeData = await getTakeData();
-    const price = takeData.price;
-    const circulatingSupply = takeData.circulatingSupply;
+    // 가격 조회
+    console.log('\n💰 가격 조회 중...');
+    const price = await getTakePrice();
     const netStakedUsd = netStakedTake * price;
-    
-    // 스테이킹 비율 계산
-    const stakingRatio = (netStakedTake / circulatingSupply) * 100;
-    
-    console.log(`   가격: $${price.toFixed(4)}`);
-    console.log(`   순환 공급량: ${circulatingSupply.toLocaleString()} TAKE`);
-    console.log(`   스테이킹 비율: ${stakingRatio.toFixed(2)}%`);
     
     // 결과 객체
     const stats = {
@@ -223,11 +175,7 @@ async function getTotalStaking(forceRefresh = false) {
         totalDeposited: depositTake,
         totalClaimed: claimTake,
         depositCount: deposits.count,
-        claimCount: claims.count + earlyClaims.count,
-        normalClaimCount: claims.count,
-        earlyClaimCount: earlyClaims.count,
-        stakingRatio,
-        circulatingSupply,
+        claimCount: claims.count,
         byType,
         price,
         timestamp: now
@@ -245,18 +193,12 @@ async function getTotalStaking(forceRefresh = false) {
     console.log('───────────────────────────────────────────────────');
     console.log(`💎 총 스테이킹: ${netStakedTake.toLocaleString()} TAKE`);
     console.log(`💵 USD 가치: $${netStakedUsd.toLocaleString()}`);
-    console.log(`📊 스테이킹 비율: ${stakingRatio.toFixed(2)}% (순환 공급량 대비)`);
     console.log('───────────────────────────────────────────────────');
     console.log('📊 타입별 현황:');
     for (const type of types) {
         const t = byType[type];
-        const normalPct = t.normalClaimCount > 0 ? ` (일반 ${t.normalClaimCount}회` : '';
-        const earlyPct = t.earlyClaimCount > 0 ? `, 긴급 ${t.earlyClaimCount}회)` : normalPct ? ')' : '';
-        console.log(`   ${type}: ${t.netStaked.toLocaleString()} TAKE (입금 ${t.depositCount}회, 출금 ${t.claimCount}회${normalPct}${earlyPct}`);
+        console.log(`   ${type}: ${t.netStaked.toLocaleString()} TAKE (${t.depositCount}회 입금, ${t.claimCount}회 출금)`);
     }
-    console.log('───────────────────────────────────────────────────');
-    console.log(`🟢 총 Deposit: ${depositTake.toLocaleString()} TAKE (${deposits.count}회)`);
-    console.log(`🔴 총 Claim: ${claimTake.toLocaleString()} TAKE (일반 ${claims.count}회, 긴급 ${earlyClaims.count}회)`);
     console.log('═══════════════════════════════════════════════════');
     console.log('');
     
@@ -289,6 +231,5 @@ module.exports = {
     getTotalStaking,
     clearStatsCache,
     getCacheStatus,
-    STAKING_POOLS,
-    LOCKUP_DURATIONS
+    STAKING_POOLS
 };
