@@ -282,6 +282,19 @@ bot.onText(/\/totalstaking/, async (msg) => {
             cacheInfo = `\n\n<i>📦 캐시 유효: ${mins}분 ${secs}초</i>`;
         }
         
+        // 타입별 통계 문자열 생성
+        const byType = stats.byType;
+        let typeStats = '';
+        const types = ['Flexible', '30일', '90일', '180일'];
+        
+        for (const type of types) {
+            const t = byType[type];
+            if (t && t.netStaked > 0) {
+                const pct = ((t.netStaked / stats.netStaked) * 100).toFixed(1);
+                typeStats += `   • ${type}: ${t.netStaked.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${pct}%)\n`;
+            }
+        }
+        
         const statsMsg = `
 📊 <b>OVERTAKE 전체 스테이킹 현황</b>
 
@@ -293,6 +306,8 @@ bot.onText(/\/totalstaking/, async (msg) => {
    $${stats.netStakedUsd.toLocaleString('en-US', {maximumFractionDigits: 0})}
 ━━━━━━━━━━━━━━━━━━━━━
 
+<b>🔒 타입별 현황:</b>
+${typeStats}
 <b>📈 상세 내역:</b>
 🟢 총 Deposit: ${stats.totalDeposited.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
 🔴 총 Claim: ${stats.totalClaimed.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE
@@ -341,6 +356,19 @@ bot.onText(/\/refreshstaking/, async (msg) => {
             await bot.deleteMessage(chatId, loadingMsg.message_id);
         } catch (e) {}
         
+        // 타입별 통계 문자열 생성
+        const byType = stats.byType;
+        let typeStats = '';
+        const types = ['Flexible', '30일', '90일', '180일'];
+        
+        for (const type of types) {
+            const t = byType[type];
+            if (t && t.netStaked > 0) {
+                const pct = ((t.netStaked / stats.netStaked) * 100).toFixed(1);
+                typeStats += `   • ${type}: ${t.netStaked.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${pct}%)\n`;
+            }
+        }
+        
         const statsMsg = `
 🔄 <b>OVERTAKE 스테이킹 현황 (새로고침)</b>
 
@@ -352,6 +380,8 @@ bot.onText(/\/refreshstaking/, async (msg) => {
    $${stats.netStakedUsd.toLocaleString('en-US', {maximumFractionDigits: 0})}
 ━━━━━━━━━━━━━━━━━━━━━
 
+<b>🔒 타입별 현황:</b>
+${typeStats}
 🟢 총 Deposit: ${stats.totalDeposited.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${stats.depositCount}회)
 🔴 총 Claim: ${stats.totalClaimed.toLocaleString('en-US', {maximumFractionDigits: 0})} TAKE (${stats.claimCount}회)
 
